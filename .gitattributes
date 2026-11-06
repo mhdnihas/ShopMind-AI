@@ -1,0 +1,4 @@
+# Force LF so scripts and configs work inside Linux containers (R10).
+* text=auto eol=lf
+*.png binary
+*.pdf binary
