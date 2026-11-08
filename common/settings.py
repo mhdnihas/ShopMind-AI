@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     store_api_url: str = "http://localhost:8002"
     orders_agent_url: str = "http://localhost:8001"
+    # Upper bound for one HTTP call between services; a hung backend must not hang a chat turn.
+    http_timeout_seconds: float = 10.0
 
     database_url: str = "postgresql://shopmind:shopmind@localhost:5432/shopmind"
 
