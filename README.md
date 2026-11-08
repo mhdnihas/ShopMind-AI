@@ -10,8 +10,10 @@ caller's own bearer token.
 |---|---|
 | 0 — Project skeleton, config | ✅ Done |
 | 1 — Mock store API (R0) | ✅ Done |
-| 2 — Order tools + guardrails | ⏳ Next |
-| 3+ — Sub-agent, orchestrator, HITL, streaming, persistence, Docker | Planned |
+| 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
+| 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
+| 4 — LLM factory + fake LLM | ⏳ Next |
+| 5+ — Orchestrator, HITL, streaming, persistence, evals, Docker | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -25,6 +27,28 @@ copy .env.example .env          # Linux/macOS: cp .env.example .env
 ```
 
 `LLM_PROVIDER=fake` is the default, so nothing else is needed to run offline.
+
+## Running the services locally
+
+Each service is its own process, so use one terminal per service and activate the
+virtual environment in each. Start the store first, because the sub-agent calls it.
+
+| Terminal | Command | URL |
+|---|---|---|
+| 1 — Store API | `python -m store_api` | http://localhost:8002 |
+| 2 — Orders sub-agent | `python -m orders_agent` | http://localhost:8001 |
+
+Each one prints `Uvicorn running on http://127.0.0.1:<port>` when ready; stop it with
+`Ctrl+C`. Then check them from a third terminal:
+
+```bash
+curl.exe http://localhost:8002/healthz
+curl.exe http://localhost:8001/healthz
+curl.exe http://localhost:8001/.well-known/agent-card.json
+```
+
+The agent card is served by the running sub-agent and built from the code in
+`orders_agent/skills.py` — it is a URL, not a file in the repository.
 
 ## Running the tests
 
@@ -83,6 +107,42 @@ curl.exe -H "Authorization: Bearer tok_acme_alice" "http://localhost:8002/orders
 curl.exe -X POST -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"id\":1042}' http://localhost:8002/orders/cancel
 ```
 
+## Orders sub-agent (R2)
+
+Owns the order tools and the guardrails. Reached over JSON-RPC 2.0; the orchestrator
+discovers it from its agent card and never imports its code. Needs the store API running
+(viewing the agent card does not).
+
+```bash
+python -m orders_agent   # http://localhost:8001   (override with HOST / PORT)
+```
+
+All skills go through the single `POST /` endpoint, so use curl rather than the `/docs` page
+to try them.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/.well-known/agent-card.json` | Agent card: name, endpoint, skills with JSON Schemas (public, no token) |
+| POST | `/` | JSON-RPC 2.0 — `method` is a skill id, `params` an object |
+
+| Skill | Mutating | Purpose |
+|---|---|---|
+| `list_orders` | no | Filter by `status`, `customer_name`, `placed_more_than_days_ago` |
+| `get_order` | no | One order by `order_id` (legacy envelope handled) |
+| `preview_action` | no | Proposal for `refund`/`cancel`: what changes and the amount returned |
+| `refund_order` | **yes** | Only after human approval |
+| `cancel_order` | **yes** | Only after human approval |
+
+Every order is sanitized before it is returned: emails/phones redacted, instruction-like
+customer notes withheld (`note_flagged: true`). Business failures (not found, 409, store
+down) come back as `result: {"ok": false, "error": ...}`; protocol failures (bad JSON,
+unknown method, invalid params, missing token) as JSON-RPC `error` objects.
+
+```bash
+curl.exe -s http://localhost:8001/.well-known/agent-card.json
+curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"preview_action\",\"params\":{\"action\":\"refund\",\"order_id\":1042}}'
+```
+
 ## Layout
 
 | Path | Purpose |
@@ -104,5 +164,6 @@ All settings come from environment variables (see `.env.example`). Never commit 
 | `ANTHROPIC_API_KEY` | — | Only needed when `LLM_PROVIDER=anthropic` |
 | `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Model name for the real provider |
 | `STORE_API_URL` | `http://localhost:8002` | Store API base URL |
-| `ORDERS_AGENT_URL` | `http://localhost:8001` | Orders sub-agent base URL |
+| `ORDERS_AGENT_URL` | `http://localhost:8001` | Orders sub-agent base URL (also the endpoint published in its card) |
+| `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for each call between services |
 | `DATABASE_URL` | `postgresql://shopmind:shopmind@localhost:5432/shopmind` | Checkpointer DB (R7) |
