@@ -194,7 +194,8 @@ PostgreSQL is added.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/chat` | `{"message": "...", "thread_id": "..."}`; the reply streams over SSE |
+| POST | `/chat` | `{"message": "...", "thread_id": "..."}` and an optional `"model"`; the reply streams over SSE |
+| GET | `/models` | The models that can be selected, default first |
 | POST | `/chat/{thread_id}/approve` | Approve the waiting proposal; the result streams |
 | POST | `/chat/{thread_id}/reject` | Reject it; the result streams |
 | GET | `/healthz` | Liveness check |
@@ -212,7 +213,9 @@ Each thread belongs to the caller's merchant: the real key is `merchant:thread_i
 same `thread_id` from another merchant is a separate conversation.
 
 Chat in the browser at **http://localhost:8000/**. Pick a demo account at the top; refunds and
-cancels appear as a card with Approve and Reject.
+cancels appear as a card with Approve and Reject. With `LLM_PROVIDER=google` a model picker
+also appears, so you can switch model in the middle of a conversation if one reaches its
+usage limit.
 
 Or chat from the terminal, answering `a` or `r` when a proposal appears:
 
@@ -246,7 +249,8 @@ All settings come from environment variables (see `.env.example`). Never commit 
 |---|---|---|
 | `LLM_PROVIDER` | `fake` | `fake` (offline, scripted) or `google` |
 | `GOOGLE_API_KEY` | — | Only needed when `LLM_PROVIDER=google` |
-| `GOOGLE_MODEL` | `gemini-3.6-flash` | Model name for the real provider |
+| `GOOGLE_MODEL` | `gemini-3.1-flash-lite` | Default model for the real provider |
+| `GOOGLE_EXTRA_MODELS` | `gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-3.6-flash` | Other models the web page can switch to |
 | `STORE_API_URL` | `http://localhost:8002` | Store API base URL |
 | `ORDERS_AGENT_URL` | `http://localhost:8001` | Orders sub-agent base URL (also the endpoint published in its card) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for each call between services |

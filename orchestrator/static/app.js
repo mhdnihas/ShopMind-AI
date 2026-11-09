@@ -17,6 +17,8 @@ const SUGGESTIONS = [
 ];
 
 const account = document.getElementById("account");
+const modelPicker = document.getElementById("model-picker");
+const model = document.getElementById("model");
 const chat = document.getElementById("chat");
 const messages = document.getElementById("messages");
 const form = document.getElementById("composer");
@@ -56,6 +58,7 @@ function refreshComposer() {
   input.disabled = locked;
   send.disabled = locked;
   account.disabled = busy;
+  model.disabled = busy;
   hint.textContent = waiting
     ? "Approve or reject the proposal to continue."
     : busy
@@ -268,7 +271,21 @@ function sendMessage(text) {
   add(el("div", "bubble user", message));
   input.value = "";
   input.style.height = "";
-  streamTurn("/chat", { message, thread_id: threadId });
+  const body = { message, thread_id: threadId };
+  if (!modelPicker.hidden) body.model = model.value;
+  streamTurn("/chat", body);
+}
+
+async function loadModels() {
+  try {
+    const response = await fetch("/models");
+    const { models } = await response.json();
+    model.replaceChildren(...models.map(({ id, label }) => new Option(label, id)));
+    // With one model there is nothing to choose.
+    modelPicker.hidden = models.length < 2;
+  } catch {
+    modelPicker.hidden = true;
+  }
 }
 
 form.addEventListener("submit", (event) => {
@@ -296,3 +313,4 @@ document.getElementById("new-chat").addEventListener("click", () => {
 account.addEventListener("change", startConversation);
 
 startConversation();
+loadModels();

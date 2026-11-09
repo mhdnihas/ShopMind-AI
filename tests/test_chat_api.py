@@ -11,9 +11,17 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langgraph.checkpoint.memory import InMemorySaver
 
 from orchestrator.a2a_client import A2AClient
-from orchestrator.api import BUSY, OUT_OF_DATE, TOO_MANY_STEPS, UNAVAILABLE, create_app
+from orchestrator.api import (
+    BUSY,
+    OUT_OF_DATE,
+    RATE_LIMITED,
+    TOO_MANY_STEPS,
+    UNAVAILABLE,
+    create_app,
+)
 from orchestrator.client import parse_events
 from orchestrator.fake_llm import ScriptedChatModel
 from orchestrator.graph import build_graph
@@ -340,6 +348,89 @@ async def test_endless_loop_becomes_an_error_event(a2a, store):
         "error",
         {"message": TOO_MANY_STEPS},
     )
+
+
+# --- choosing a model -----------------------------------------------------------------
+
+
+class TaggedModel(ScriptedChatModel):
+    """Replies with its own name, so a test can see which model answered."""
+
+    tag: str
+
+    def _generate(self, messages, *args, **kwargs):
+        reply = AIMessage(content=self.tag)
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+class GoogleRateLimitError(Exception):
+    """Same class name as the provider's error for a used-up quota."""
+
+
+class RateLimitedModel(ScriptedChatModel):
+    def _generate(self, messages, *args, **kwargs):
+        raise GoogleRateLimitError("quota detail")
+
+
+@pytest.fixture
+def multi(a2a, store):
+    saver = InMemorySaver()
+    graphs = {
+        "gemini-a-flash": build_graph(TaggedModel(tag="from-a"), a2a, saver),
+        "gemini-b-flash-lite": build_graph(TaggedModel(tag="from-b"), a2a, saver),
+        "limited": build_graph(RateLimitedModel(), a2a, saver),
+    }
+    api = create_app(
+        graph=graphs["gemini-a-flash"], graphs=graphs, store_url=STORE, store_transport=store
+    )
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://chat.test")
+
+
+async def chat_with(http, model, thread="m1"):
+    body = {"message": "Hello there", "thread_id": thread, "model": model}
+    return await http.post("/chat", json=body, headers=auth(ACME))
+
+
+async def test_models_are_listed_with_the_default_first(multi):
+    response = await multi.get("/models")
+    assert response.json()["models"][:2] == [
+        {"id": "gemini-a-flash", "label": "Gemini A Flash"},
+        {"id": "gemini-b-flash-lite", "label": "Gemini B Flash-Lite"},
+    ]
+
+
+async def test_requested_model_answers(multi):
+    assert text_of(await chat_with(multi, "gemini-b-flash-lite")) == "from-b"
+
+
+async def test_no_model_uses_the_default(multi):
+    assert text_of(await chat(multi, "Hello there")) == "from-a"
+
+
+async def test_model_outside_the_list_is_refused(multi):
+    response = await chat_with(multi, "gemini-pro-expensive")
+    assert response.status_code == 422
+
+
+async def test_switching_model_keeps_the_conversation(multi):
+    await chat_with(multi, "gemini-a-flash")
+    await chat_with(multi, "gemini-b-flash-lite")
+    state = await multi._transport.app.state.graph.aget_state(
+        {"configurable": {"thread_id": "m_acme:m1"}}
+    )
+    assert [m.content for m in state.values["messages"]] == [
+        "Hello there",
+        "from-a",
+        "Hello there",
+        "from-b",
+    ]
+
+
+async def test_used_up_quota_suggests_switching_then_another_model_works(multi):
+    limited = await chat_with(multi, "limited")
+    assert events(limited) == [("error", {"message": RATE_LIMITED})]
+    assert "quota detail" not in limited.text
+    assert text_of(await chat_with(multi, "gemini-b-flash-lite")) == "from-b"
 
 
 # --- web page ------------------------------------------------------------------------
