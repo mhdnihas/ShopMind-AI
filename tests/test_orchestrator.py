@@ -164,9 +164,12 @@ async def test_token_is_sent_unchanged_on_each_call(client):
         seen.append(request.headers["Authorization"])
         body = httpx.Response(200, content=request.content).json()
         result = {"ok": True, "data": [], "error": None}
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+        message = {"messageId": "m", "role": "ROLE_AGENT", "parts": [{"data": result}]}
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": body["id"], "result": {"message": message}}
+        )
 
-    spy = A2AClient(client.card, transport=httpx.MockTransport(handler))
+    spy = A2AClient(client.card, client.sdk_card, transport=httpx.MockTransport(handler))
     graph = build_graph(ScriptedChatModel(), spy)
     await ask(graph, "List all orders", token=ACME)
     await ask(graph, "List all orders", token=GLOBEX)
@@ -177,7 +180,7 @@ async def test_missing_token_fails_closed_without_calling_the_agent(client):
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("the sub-agent must not be called without a token")
 
-    spy = A2AClient(client.card, transport=httpx.MockTransport(handler))
+    spy = A2AClient(client.card, client.sdk_card, transport=httpx.MockTransport(handler))
     graph = build_graph(ScriptedChatModel(), spy)
     messages = await ask(graph, "Show me order 1042", token=None)
     assert "not authenticated" in messages[-1].content
@@ -252,7 +255,7 @@ async def test_sub_agent_outage_becomes_a_message_not_a_crash(client):
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    down = A2AClient(client.card, transport=httpx.MockTransport(handler))
+    down = A2AClient(client.card, client.sdk_card, transport=httpx.MockTransport(handler))
     graph = build_graph(ScriptedChatModel(), down)
     messages = await ask(graph, "Show me order 1042")
     assert messages[-1].content == "I couldn't complete that: The orders agent is unavailable"

@@ -65,11 +65,15 @@ async def test_invalid_params_surface_as_a2a_error(client):
     assert e.value.code == -32602
 
 
-async def test_response_with_the_wrong_id_is_rejected(client):
+async def test_reply_without_a_result_is_rejected(client):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "other", "result": {"ok": True}})
+        req_id = httpx.Response(200, content=request.content).json()["id"]
+        message = {"messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "not data"}]}
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": req_id, "result": {"message": message}}
+        )
 
-    other = A2AClient(client.card, transport=httpx.MockTransport(handler))
+    other = A2AClient(client.card, client.sdk_card, transport=httpx.MockTransport(handler))
     with pytest.raises(A2AError, match="Malformed"):
         await other.call("get_order", {"order_id": 1}, ACME)
 

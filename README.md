@@ -1,8 +1,8 @@
 # ShopMind AI — ShopHub order-support assistant
 
 Multi-tenant support assistant for ShopHub merchant staff: a LangGraph orchestrator that
-talks to an orders sub-agent over JSON-RPC 2.0, which calls a mock store API with the
-caller's own bearer token.
+talks to an orders sub-agent over Google's A2A protocol (`a2a-sdk`), which calls a mock store
+API with the caller's own bearer token.
 
 > Work in progress — built phase by phase. Sections are added as each phase lands.
 
@@ -11,7 +11,7 @@ caller's own bearer token.
 | 0 — Project skeleton, config | ✅ Done |
 | 1 — Mock store API (R0) | ✅ Done |
 | 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
-| 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
+| 3 — Orders sub-agent over the A2A protocol (R2, R3) | ✅ Done |
 | 4 — LLM factory + fake LLM | ✅ Done |
 | 5 — LangGraph orchestrator (R1) | ✅ Done |
 | 6 — Human approval for refunds and cancels (R5) | ✅ Done |
@@ -138,21 +138,23 @@ curl.exe -X POST -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: app
 
 ## Orders sub-agent (R2)
 
-Owns the order tools and the guardrails. Reached over JSON-RPC 2.0; the orchestrator
-discovers it from its agent card and never imports its code. Needs the store API running
-(viewing the agent card does not).
+Owns the order tools and the guardrails. Reached over Google's A2A protocol 1.0, using the
+official `a2a-sdk` on both sides; the orchestrator discovers it from its agent card and never
+imports its code. Needs the store API running (viewing the agent card does not).
 
 ```bash
 python -m orders_agent   # http://localhost:8001   (override with HOST / PORT)
 ```
 
-All skills go through the single `POST /` endpoint, so use curl rather than the `/docs` page
-to try them.
-
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/.well-known/agent-card.json` | Agent card: name, endpoint, skills with JSON Schemas (public, no token) |
-| POST | `/` | JSON-RPC 2.0 — `method` is a skill id, `params` an object |
+| GET | `/.well-known/agent-card.json` | A2A agent card (public, no token) |
+| POST | `/` | A2A JSON-RPC binding: `SendMessage` with the `A2A-Version: 1.0` header |
+
+A skill call is an A2A message with one data part, `{"skill": "<id>", "params": {...}}`, and the
+reply is an A2A agent message whose data part is `{"ok", "data", "error"}`. A standard A2A skill
+has no field for argument schemas or "this changes data", so the card publishes both through an
+A2A extension (`urn:shopmind:a2a:skill-schemas:v1`).
 
 | Skill | Mutating | Purpose |
 |---|---|---|
@@ -164,12 +166,12 @@ to try them.
 
 Every order is sanitized before it is returned: emails/phones redacted, instruction-like
 customer notes withheld (`note_flagged: true`). Business failures (not found, 409, store
-down) come back as `result: {"ok": false, "error": ...}`; protocol failures (bad JSON,
-unknown method, invalid params, missing token) as JSON-RPC `error` objects.
+down) come back as a normal reply with `{"ok": false, "error": ...}`; protocol failures (bad
+JSON, unknown skill, invalid params, missing token) as A2A errors.
 
 ```bash
 curl.exe -s http://localhost:8001/.well-known/agent-card.json
-curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"preview_action\",\"params\":{\"action\":\"refund\",\"order_id\":1042}}'
+curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "A2A-Version: 1.0" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"SendMessage\",\"params\":{\"message\":{\"messageId\":\"m1\",\"role\":\"ROLE_USER\",\"parts\":[{\"data\":{\"skill\":\"get_order\",\"params\":{\"order_id\":1042}}}]}}}'
 ```
 
 ## Choosing the model
@@ -277,7 +279,7 @@ The bearer token is never saved. Tests that need a database skip themselves if t
 | Path | Purpose |
 |---|---|
 | `store_api/` | R0 mock store API (port 8002) |
-| `orders_agent/` | R2 orders sub-agent, JSON-RPC + agent card (port 8001) |
+| `orders_agent/` | R2 orders sub-agent on the A2A protocol (port 8001) |
 | `orchestrator/` | LangGraph orchestrator + SSE chat API (port 8000) |
 | `common/` | Shared configuration (`common/settings.py`, read from env / `.env`) and the untrusted-data marker |
 | `evals/` | R9 evaluation harness |
