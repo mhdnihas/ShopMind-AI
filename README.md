@@ -15,8 +15,9 @@ caller's own bearer token.
 | 4 — LLM factory + fake LLM | ✅ Done |
 | 5 — LangGraph orchestrator (R1) | ✅ Done |
 | 6 — Human approval for refunds and cancels (R5) | ✅ Done |
-| 7 — Chat API and SSE streaming (R6, R4c) | ⏳ Next |
-| 8+ — Persistence, evals, Docker | Planned |
+| 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
+| 8 — PostgreSQL persistence (R7) | ⏳ Next |
+| 9+ — Evals, Docker, DESIGN.md | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -40,6 +41,7 @@ virtual environment in each. Start the store first, because the sub-agent calls 
 |---|---|---|
 | 1 — Store API | `python -m store_api` | http://localhost:8002 |
 | 2 — Orders sub-agent | `python -m orders_agent` | http://localhost:8001 |
+| 3 — Chat API | `python -m orchestrator` | http://localhost:8000 |
 
 Each one prints `Uvicorn running on http://127.0.0.1:<port>` when ready; stop it with
 `Ctrl+C`. Then check them from a third terminal:
@@ -47,6 +49,7 @@ Each one prints `Uvicorn running on http://127.0.0.1:<port>` when ready; stop it
 ```bash
 curl.exe http://localhost:8002/healthz
 curl.exe http://localhost:8001/healthz
+curl.exe http://localhost:8000/healthz
 curl.exe http://localhost:8001/.well-known/agent-card.json
 ```
 
@@ -183,6 +186,43 @@ A refund or cancel never runs straight away:
 After a decision the outcome is written by code, not the model, so what happened to the money
 is never paraphrased. The token is passed again on resume, because it is never saved, so the
 approver's own merchant is what the store checks.
+
+### Chat API (R6)
+
+Needs the store and the sub-agent running first. Conversations are held in memory until
+PostgreSQL is added.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chat` | `{"message": "...", "thread_id": "..."}`; the reply streams over SSE |
+| POST | `/chat/{thread_id}/approve` | Approve the waiting proposal; the result streams |
+| POST | `/chat/{thread_id}/reject` | Reject it; the result streams |
+| GET | `/healthz` | Liveness check |
+
+Stream events: `token`, `tool_started`, `tool_finished`, `proposal`, `done`, `error`.
+
+| Status | Meaning |
+|---|---|
+| 401 | Missing or invalid token |
+| 403 | Valid token with no merchant (refused before the model runs) |
+| 409 | A proposal is already waiting, or there is nothing to decide |
+| 503 | The store could not confirm who you are |
+
+Each thread belongs to the caller's merchant: the real key is `merchant:thread_id`, so the
+same `thread_id` from another merchant is a separate conversation.
+
+Chat from the terminal, answering `a` or `r` when a proposal appears:
+
+```bash
+python -m orchestrator.client --token tok_acme_alice
+```
+
+Or with curl. In Windows PowerShell 5.1 keep the message to one word, because spaces break
+the escaped JSON:
+
+```bash
+curl.exe -N -X POST http://localhost:8000/chat -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"message\":\"1042\",\"thread_id\":\"demo\"}'
+```
 
 ## Layout
 
