@@ -13,7 +13,7 @@ Design rules:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Self
 
 import httpx
 from pydantic import BaseModel
@@ -46,6 +46,9 @@ _HTTP_ERRORS = {
     403: "Your account is not linked to a merchant store, so no order data is available.",
     404: "Order {order_id} was not found in your store.",
 }
+_UNREADABLE = "The store system returned an unreadable response."
+# What malformed JSON, or valid JSON of the wrong shape, raises while being read.
+_BAD_BODY = (ValueError, KeyError, TypeError, AttributeError)
 
 
 class StoreClient:
@@ -65,7 +68,7 @@ class StoreClient:
             transport=transport,
         )
 
-    async def __aenter__(self) -> StoreClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -118,15 +121,17 @@ class StoreClient:
         if resp.status_code != 200:
             return self._http_failure(resp)
 
-        orders = resp.json()
-        if customer_name:
-            needle = customer_name.casefold()
-            orders = [o for o in orders if needle in o.get("customer_name", "").casefold()]
-        if placed_more_than_days_ago is not None:
-            cutoff = datetime.now(UTC) - timedelta(days=placed_more_than_days_ago)
-            orders = [o for o in orders if datetime.fromisoformat(o["placed_at"]) < cutoff]
-
-        return ToolResult.success([sanitize_order(o) for o in orders])
+        try:
+            orders = resp.json()
+            if customer_name:
+                needle = customer_name.casefold()
+                orders = [o for o in orders if needle in o.get("customer_name", "").casefold()]
+            if placed_more_than_days_ago is not None:
+                cutoff = datetime.now(UTC) - timedelta(days=placed_more_than_days_ago)
+                orders = [o for o in orders if datetime.fromisoformat(o["placed_at"]) < cutoff]
+            return ToolResult.success([sanitize_order(o) for o in orders])
+        except _BAD_BODY:
+            return ToolResult.failure(_UNREADABLE)
 
     async def get_order(self, order_id: int) -> ToolResult:
         """Look up one order via the legacy endpoint.
@@ -143,7 +148,7 @@ class StoreClient:
         try:
             body = resp.json()
         except ValueError:
-            return ToolResult.failure("The store system returned an unreadable response.")
+            return ToolResult.failure(_UNREADABLE)
 
         if not isinstance(body, dict) or body.get("status") is not True:
             # Covers {"status": false, ...}, a missing status key and any other shape.
@@ -171,7 +176,10 @@ class StoreClient:
             return resp
         if resp.status_code != 200:
             return self._http_failure(resp, order_id)
-        return ToolResult.success(sanitize_order(resp.json()))
+        try:
+            return ToolResult.success(sanitize_order(resp.json()))
+        except _BAD_BODY:
+            return ToolResult.failure(_UNREADABLE)
 
 
 def _detail(resp: httpx.Response) -> str | None:

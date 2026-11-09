@@ -17,8 +17,9 @@ caller's own bearer token.
 | 6 — Human approval for refunds and cancels (R5) | ✅ Done |
 | 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
 | 8 — PostgreSQL persistence (R7) | ✅ Done |
-| 9 — Test review (R8) | ⏳ Next |
-| 10+ — Evals, Docker, DESIGN.md | Planned |
+| 9 — Test review (R8) | ✅ Done |
+| 10 — Evaluation harness (R9) | ⏳ Next |
+| 11+ — Docker, DESIGN.md | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -64,6 +65,10 @@ pytest                 # whole suite, no API key needed
 pytest -v              # one line per test
 pytest -k cancel -v    # only tests whose name contains "cancel"
 ```
+
+The suite runs offline with no API key: the store and sub-agent run in-process and only the
+model is scripted. Tests that need PostgreSQL or the Gemini package skip themselves when those
+are missing. Set `TEST_DATABASE_URL` to run the database tests against a specific server.
 
 ## Mock store API (R0)
 

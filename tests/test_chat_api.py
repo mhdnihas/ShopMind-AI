@@ -20,6 +20,8 @@ from orchestrator.api import (
     RATE_LIMITED,
     TOO_MANY_STEPS,
     UNAVAILABLE,
+    Caller,
+    ChatRequest,
     create_app,
 )
 from orchestrator.client import parse_events
@@ -319,6 +321,22 @@ async def test_state_is_checked_again_once_the_conversation_is_held(http, a2a, m
 
     assert events(response) == [("error", {"message": OUT_OF_DATE})]
     assert "is now REFUNDED" in text_of(await decide(http, "approve"))  # proposal survived
+
+
+async def test_abandoned_stream_frees_the_conversation(a2a, store):
+    """A client that disconnects mid-turn must not leave the conversation locked."""
+    api = create_app(
+        graph=build_graph(ScriptedChatModel(), a2a), store_url=STORE, store_transport=store
+    )
+    endpoint = next(r.endpoint for r in api.routes if getattr(r, "path", "") == "/chat")
+    body = ChatRequest(message="Show me order 1042", thread_id="gone")
+    response = await endpoint(body, Caller(token=ACME, merchant="m_acme"))
+    stream = response.body_iterator
+    await anext(stream)  # the turn is running and holds the conversation
+    await stream.aclose()  # the client went away
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://chat.test")
+    assert names(await chat(http, "Hello there", thread="gone"))[-1] == "done"
 
 
 # --- failures become events ----------------------------------------------------------

@@ -65,13 +65,22 @@ async def test_invalid_params_surface_as_a2a_error(client):
     assert e.value.code == -32602
 
 
+async def test_response_with_the_wrong_id_is_rejected(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "other", "result": {"ok": True}})
+
+    other = A2AClient(client.card, transport=httpx.MockTransport(handler))
+    with pytest.raises(A2AError, match="Malformed"):
+        await other.call("get_order", {"order_id": 1}, ACME)
+
+
 # --- R3: credential forwarding -------------------------------------------------
 
 
 async def test_token_reaches_store_unchanged_through_both_hops():
     """Real sub-agent in-process; the store is mocked by respx so we can inspect
     the exact Authorization header the sub-agent sends."""
-    token = "tok_acme_alice"  # noqa: S105 — fake seed token
+    token = "tok_acme_alice"
     agent = create_agent(store_url=STORE, public_url=AGENT)  # real HTTP to the store
     transport = httpx.ASGITransport(app=agent)  # not intercepted by respx
 

@@ -30,6 +30,38 @@ def client_for(token, transport):
     return StoreClient(BASE, token, transport=transport)
 
 
+# --- unreadable responses ---------------------------------------------------
+
+
+@pytest.mark.parametrize("body", [b"<html>oops</html>", b'"text"', b"[1, 2]", b'{"a": 1}'])
+async def test_list_orders_reports_an_unreadable_body(body):
+    with respx.mock(base_url=BASE) as store:
+        store.get("/orders").respond(200, content=body)
+        async with StoreClient(BASE, "tok") as c:
+            r = await c.list_orders()
+    assert r.ok is False
+    assert "unreadable" in r.error
+
+
+async def test_list_orders_reports_an_order_with_no_date():
+    with respx.mock(base_url=BASE) as store:
+        store.get("/orders").respond(200, json=[{"id": 1}])
+        async with StoreClient(BASE, "tok") as c:
+            r = await c.list_orders(placed_more_than_days_ago=3)
+    assert r.ok is False
+    assert "unreadable" in r.error
+
+
+@pytest.mark.parametrize("body", [b"<html>oops</html>", b'"text"', b"[1]"])
+async def test_refund_reports_an_unreadable_body(body):
+    with respx.mock(base_url=BASE) as store:
+        store.post("/orders/refund").respond(200, content=body)
+        async with StoreClient(BASE, "tok") as c:
+            r = await c.refund_order(1042)
+    assert r.ok is False
+    assert "unreadable" in r.error
+
+
 # --- list_orders ------------------------------------------------------------
 
 
@@ -151,7 +183,7 @@ async def test_network_errors_become_data(exc, word):
 
 
 async def test_token_is_forwarded_unchanged_on_every_call():
-    token = "tok_acme_alice"  # noqa: S105 — fake seed token of the mock store
+    token = "tok_acme_alice"
     with respx.mock(base_url=BASE) as mock:
         mock.get("/orders").respond(200, json=[])
         mock.get("/orders/lookup").respond(200, json={"status": False, "message": "x"})
