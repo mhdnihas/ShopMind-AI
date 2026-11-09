@@ -192,6 +192,7 @@ async def test_unreachable_database_stops_startup_without_leaking_the_url():
     assert error.value.__suppress_context__
 
 
-async def test_empty_url_explicitly_uses_memory():
-    async with open_checkpointer("") as saver:
+@pytest.mark.parametrize("url", ["", " "])  # PowerShell cannot set an empty variable
+async def test_empty_url_explicitly_uses_memory(url):
+    async with open_checkpointer(url) as saver:
         assert isinstance(saver, InMemorySaver)

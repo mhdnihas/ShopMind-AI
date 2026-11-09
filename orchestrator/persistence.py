@@ -35,7 +35,7 @@ class CheckpointStoreError(RuntimeError):
 async def open_checkpointer(
     database_url: str, *, timeout: float = CONNECT_TIMEOUT_SECONDS
 ) -> AsyncIterator[BaseCheckpointSaver]:
-    if not database_url:
+    if not database_url.strip():
         log.warning("DATABASE_URL is empty: conversations are kept in memory only.")
         yield InMemorySaver()
         return

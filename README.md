@@ -4,23 +4,39 @@ Multi-tenant support assistant for ShopHub merchant staff: a LangGraph orchestra
 talks to an orders sub-agent over Google's A2A protocol (`a2a-sdk`), which calls a mock store
 API with the caller's own bearer token.
 
-> Work in progress — built phase by phase. Sections are added as each phase lands.
+See [DESIGN.md](DESIGN.md) for the architecture, trade-offs and what was cut.
 
-| Phase | Status |
-|---|---|
-| 0 — Project skeleton, config | ✅ Done |
-| 1 — Mock store API (R0) | ✅ Done |
-| 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
-| 3 — Orders sub-agent over the A2A protocol (R2, R3) | ✅ Done |
-| 4 — LLM factory + fake LLM | ✅ Done |
-| 5 — LangGraph orchestrator (R1) | ✅ Done |
-| 6 — Human approval for refunds and cancels (R5) | ✅ Done |
-| 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
-| 8 — PostgreSQL persistence (R7) | ✅ Done |
-| 9 — Test review (R8) | ✅ Done |
-| 10 — Evaluation harness (R9) | ✅ Done |
-| 11 — Docker Compose (R10) | ⏳ Next |
-| 12 — README and DESIGN.md (R11) | Planned |
+**Model provider:** Google Gemini, through LangChain, behind one factory
+(`orchestrator/llm.py`). A scripted fake model is the default and needs no API key.
+
+**Status:** R0 to R9 and R11 are done and tested. R10 (Docker) is written but has not been run
+yet; see [Docker](#docker).
+
+## Quick start in fake-LLM mode
+
+No API key is needed. These are the exact commands.
+
+```bash
+pip install -e ".[dev]"   # after activating a virtual environment (see Setup)
+pytest                    # the tests
+python -m evals           # the eval harness
+```
+
+To run the chat with the fake model, start the services below with this in the chat API's
+terminal (`DATABASE_URL=` keeps conversations in memory, so PostgreSQL is not needed):
+
+```bash
+$env:LLM_PROVIDER="fake"; $env:DATABASE_URL=" "; python -m orchestrator
+```
+
+On Linux or macOS:
+
+```bash
+LLM_PROVIDER=fake DATABASE_URL= python -m orchestrator
+```
+
+Windows PowerShell removes a variable set to an empty string, so the PowerShell command uses a
+single space.
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -47,7 +63,7 @@ virtual environment in each. Start the store first, because the sub-agent calls 
 | 3 — Chat API | `python -m orchestrator` | http://localhost:8000 |
 
 Each one prints `Uvicorn running on http://127.0.0.1:<port>` when ready; stop it with
-`Ctrl+C`. Then check them from a third terminal:
+`Ctrl+C`. Then check them from another terminal:
 
 ```bash
 curl.exe http://localhost:8002/healthz
@@ -58,6 +74,19 @@ curl.exe http://localhost:8001/.well-known/agent-card.json
 
 The agent card is served by the running sub-agent and built from the code in
 `orders_agent/skills.py` — it is a URL, not a file in the repository.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+This is meant to start the store, PostgreSQL, the sub-agent and the chat API on the fake model
+with no setup, then serve the chat at http://localhost:8000/. For Gemini, put
+`LLM_PROVIDER=google` and `GOOGLE_API_KEY` in `.env`.
+
+**Not verified yet.** The compose file validates, but no image has been built or run. See
+[DESIGN.md](DESIGN.md).
 
 ## Running the tests
 
@@ -265,8 +294,8 @@ CREATE DATABASE shopmind OWNER shopmind;
 ```
 
 The tables are created at startup. If PostgreSQL cannot be reached the chat API stops with a
-clear error. To run without it, set `DATABASE_URL=` (empty); conversations are then lost on
-restart.
+clear error. If your server is not on port 5432, change the port in `DATABASE_URL`. To run
+without it, set `DATABASE_URL=` (empty); conversations are then lost on restart.
 
 To see it work: ask for a refund, stop `python -m orchestrator` with `Ctrl+C`, start it again,
 then approve the same proposal. Restart only the chat API, because the mock store keeps its

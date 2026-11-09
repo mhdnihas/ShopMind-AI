@@ -1,0 +1,77 @@
+# docker compose up          -> everything, on the fake model, with no setup
+# Put LLM_PROVIDER=google and GOOGLE_API_KEY in .env to use Gemini.
+#
+# The database password below is a local development default, not a secret.
+
+x-app: &app
+  build: .
+  image: shopmind-ai:latest
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shopmind
+      POSTGRES_PASSWORD: shopmind
+      POSTGRES_DB: shopmind
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopmind -d shopmind"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    # No published port: only the chat API needs it, and this cannot clash with a
+    # PostgreSQL already running on the host.
+
+  store:
+    <<: *app
+    command: ["python", "-m", "store_api"]
+    environment:
+      PORT: "8002"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8002:8002"
+
+  orders-agent:
+    <<: *app
+    command: ["python", "-m", "orders_agent"]
+    environment:
+      PORT: "8001"
+      STORE_API_URL: http://store:8002
+      # Published in the agent card, so it must be reachable by the chat API.
+      ORDERS_AGENT_URL: http://orders-agent:8001
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8001:8001"
+    depends_on:
+      store:
+        condition: service_healthy
+
+  orchestrator:
+    <<: *app
+    command: ["python", "-m", "orchestrator"]
+    environment:
+      PORT: "8000"
+      STORE_API_URL: http://store:8002
+      ORDERS_AGENT_URL: http://orders-agent:8001
+      DATABASE_URL: postgresql://shopmind:shopmind@db:5432/shopmind
+      LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-3.1-flash-lite}
+      GOOGLE_EXTRA_MODELS: ${GOOGLE_EXTRA_MODELS:-gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-3.6-flash}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      store:
+        condition: service_healthy
+      orders-agent:
+        condition: service_healthy
+
+volumes:
+  db-data:
