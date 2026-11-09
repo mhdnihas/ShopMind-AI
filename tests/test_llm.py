@@ -9,16 +9,17 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import StructuredTool
 
 from common.settings import Settings
+from common.untrusted import wrap_untrusted
 from orchestrator.fake_llm import FOLLOWED_INJECTION, GREETING, NO_TOOL, ScriptedChatModel
 from orchestrator.llm import LLMConfigError, get_chat_model
-from orders_agent.guardrails import NOTE_WITHHELD, sanitize_order, wrap_untrusted
+from orders_agent.guardrails import NOTE_WITHHELD, sanitize_order
 from orders_agent.skills import SKILLS
 from store_api.data import INJECTION_NOTES
 
 
 def settings(**overrides) -> Settings:
     """Settings that ignore the developer's own .env file."""
-    return Settings(_env_file=None, **{"anthropic_api_key": None, **overrides})
+    return Settings(_env_file=None, **{"google_api_key": None, **overrides})
 
 
 def make_tool(skill) -> StructuredTool:
@@ -60,27 +61,30 @@ def test_fake_is_the_default_and_needs_no_key():
 
 
 @pytest.mark.parametrize("key", [None, ""])
-def test_anthropic_without_a_key_fails_clearly(key):
-    with pytest.raises(LLMConfigError, match="ANTHROPIC_API_KEY"):
-        get_chat_model(settings(llm_provider="anthropic", anthropic_api_key=key))
+def test_google_without_a_key_fails_clearly(key):
+    with pytest.raises(LLMConfigError, match="GOOGLE_API_KEY"):
+        get_chat_model(settings(llm_provider="google", google_api_key=key))
 
 
-def test_anthropic_without_the_package_fails_clearly(monkeypatch):
-    monkeypatch.setitem(sys.modules, "langchain_anthropic", None)  # makes the import fail
+def test_google_without_the_package_fails_clearly(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langchain_google_genai", None)  # makes the import fail
     with pytest.raises(LLMConfigError, match="pip install"):
-        get_chat_model(settings(llm_provider="anthropic", anthropic_api_key="not-a-real-key"))
+        get_chat_model(settings(llm_provider="google", google_api_key="not-a-real-key"))
 
 
-def test_anthropic_model_is_configured_from_settings():
-    pytest.importorskip("langchain_anthropic")
+def test_google_model_is_configured_from_settings():
+    pytest.importorskip("langchain_google_genai")
     chat = get_chat_model(
-        settings(
-            llm_provider="anthropic", anthropic_api_key="not-a-real-key", anthropic_model="m-1"
-        )
+        settings(llm_provider="google", google_api_key="not-a-real-key", google_model="m-1")
     )
-    assert chat.model == "m-1"
-    assert chat.anthropic_api_key.get_secret_value() == "not-a-real-key"
+    assert chat.model.endswith("m-1")
+    assert chat.google_api_key.get_secret_value() == "not-a-real-key"
+    assert chat.temperature == 0.0
+    assert chat.timeout == 60.0
+    assert chat.max_retries == 2
+    assert chat.max_output_tokens == 16000
     assert "not-a-real-key" not in repr(chat)
+    chat.bind_tools(TOOLS)  # the real tool schemas are accepted without a network call
 
 
 # --- choosing a tool -----------------------------------------------------------

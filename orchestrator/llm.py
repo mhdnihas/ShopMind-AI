@@ -16,6 +16,8 @@ from orchestrator.fake_llm import ScriptedChatModel
 LLM_TIMEOUT_SECONDS = 60.0
 LLM_MAX_RETRIES = 2
 MAX_OUTPUT_TOKENS = 16000
+# Support answers should be consistent, so tool choice should not vary between runs.
+LLM_TEMPERATURE = 0.0
 
 
 class LLMConfigError(RuntimeError):
@@ -26,28 +28,29 @@ def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
     settings = settings or get_settings()
     if settings.llm_provider == "fake":
         return ScriptedChatModel()
-    if settings.llm_provider == "anthropic":
-        return _anthropic_model(settings)
+    if settings.llm_provider == "google":
+        return _google_model(settings)
     raise LLMConfigError(f"Unknown LLM provider: {settings.llm_provider}")
 
 
-def _anthropic_model(settings: Settings) -> BaseChatModel:
-    key = settings.anthropic_api_key
+def _google_model(settings: Settings) -> BaseChatModel:
+    key = settings.google_api_key
     if key is None or not key.get_secret_value():
-        raise LLMConfigError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set.")
+        raise LLMConfigError("LLM_PROVIDER=google requires GOOGLE_API_KEY to be set.")
 
     # Imported here because it is an optional dependency: fake mode must work without it.
     try:
-        from langchain_anthropic import ChatAnthropic
+        from langchain_google_genai import ChatGoogleGenerativeAI
     except ImportError as e:
         raise LLMConfigError(
-            'LLM_PROVIDER=anthropic requires the extra: pip install -e ".[anthropic]"'
+            'LLM_PROVIDER=google requires the extra: pip install -e ".[google]"'
         ) from e
 
-    return ChatAnthropic(
-        model=settings.anthropic_model,
+    return ChatGoogleGenerativeAI(
+        model=settings.google_model,
         api_key=key,
+        temperature=LLM_TEMPERATURE,
         max_tokens=MAX_OUTPUT_TOKENS,
         timeout=LLM_TIMEOUT_SECONDS,
-        max_retries=LLM_MAX_RETRIES,
+        retries=LLM_MAX_RETRIES,
     )

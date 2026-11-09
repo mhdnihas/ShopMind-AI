@@ -15,10 +15,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # LLM: "fake" runs fully offline with a scripted model (the default).
-    llm_provider: Literal["fake", "anthropic"] = "fake"
+    llm_provider: Literal["fake", "google"] = "fake"
     # SecretStr keeps the key out of repr()/logs.
-    anthropic_api_key: SecretStr | None = None
-    anthropic_model: str = "claude-sonnet-5-5"
+    google_api_key: SecretStr | None = None
+    google_model: str = "gemini-3.6-flash"
 
     store_api_url: str = "http://localhost:8002"
     orders_agent_url: str = "http://localhost:8001"

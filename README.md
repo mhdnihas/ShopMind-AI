@@ -13,8 +13,9 @@ caller's own bearer token.
 | 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
 | 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
 | 4 — LLM factory + fake LLM | ✅ Done |
-| 5 — LangGraph orchestrator (R1) | ⏳ Next |
-| 6+ — HITL, streaming, persistence, evals, Docker | Planned |
+| 5 — LangGraph orchestrator (R1) | ✅ Done |
+| 6 — Human approval for refunds and cancels (R5) | ⏳ Next |
+| 7+ — Streaming, persistence, evals, Docker | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -151,11 +152,23 @@ All model creation goes through `get_chat_model()` in `orchestrator/llm.py`.
 | `LLM_PROVIDER` | Model | Needs |
 |---|---|---|
 | `fake` (default) | `ScriptedChatModel`: fixed rules, real `tool_calls`, repeatable output | Nothing |
-| `anthropic` | `ChatAnthropic`, using `ANTHROPIC_MODEL` | `pip install -e ".[anthropic]"` and `ANTHROPIC_API_KEY` |
+| `google` | `ChatGoogleGenerativeAI` (Gemini), using `GOOGLE_MODEL` | `pip install -e ".[google]"` and `GOOGLE_API_KEY` |
 
 The fake model is deliberately gullible: if injection text reaches it, it obeys and calls
 `refund_order`, so a guardrail failure fails a test. It proves the system around the model,
 not how well a real model chooses tools or resists injection.
+
+## Orchestrator (R1)
+
+A LangGraph loop: the `agent` node asks the model what to do, the `tools` node runs any tool
+calls, and the results go back to the model until it answers in text.
+
+- **Tools come from the agent card.** The orchestrator never imports the sub-agent's code.
+- **Only read-only skills become tools.** The model has no way to call `refund_order` or
+  `cancel_order`.
+- **The token travels in LangGraph's run context** (`RunContext`). It is not a tool argument,
+  so the model never sees it. It is not in `configurable` either, because those values are
+  copied into checkpoint metadata and would end up in the database.
 
 ## Layout
 
@@ -164,7 +177,7 @@ not how well a real model chooses tools or resists injection.
 | `store_api/` | R0 mock store API (port 8002) |
 | `orders_agent/` | R2 orders sub-agent, JSON-RPC + agent card (port 8001) |
 | `orchestrator/` | LangGraph orchestrator + SSE chat API (port 8000) |
-| `common/` | Shared configuration (`common/settings.py`, read from env / `.env`) |
+| `common/` | Shared configuration (`common/settings.py`, read from env / `.env`) and the untrusted-data marker |
 | `evals/` | R9 evaluation harness |
 | `tests/` | pytest suite (runs offline) |
 
@@ -174,9 +187,9 @@ All settings come from environment variables (see `.env.example`). Never commit 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LLM_PROVIDER` | `fake` | `fake` (offline, scripted) or `anthropic` |
-| `ANTHROPIC_API_KEY` | — | Only needed when `LLM_PROVIDER=anthropic` |
-| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Model name for the real provider |
+| `LLM_PROVIDER` | `fake` | `fake` (offline, scripted) or `google` |
+| `GOOGLE_API_KEY` | — | Only needed when `LLM_PROVIDER=google` |
+| `GOOGLE_MODEL` | `gemini-3.6-flash` | Model name for the real provider |
 | `STORE_API_URL` | `http://localhost:8002` | Store API base URL |
 | `ORDERS_AGENT_URL` | `http://localhost:8001` | Orders sub-agent base URL (also the endpoint published in its card) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for each call between services |

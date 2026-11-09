@@ -11,7 +11,7 @@ reach a language model, it goes through `sanitize_order`:
    existed but never sees its text.
 
 Detection is a heuristic and can miss things. It is one layer: the agent's prompt
-also marks tool output as data (see `wrap_untrusted`), and refunds/cancels need a
+also marks tool output as data (see `common.untrusted`), and refunds/cancels need a
 human approval regardless of what the model is persuaded to do (R5).
 """
 
@@ -89,12 +89,3 @@ def sanitize_order(order: dict[str, Any]) -> dict[str, Any]:
     clean["note_flagged"] = flagged
 
     return _redact_strings(clean)
-
-
-_TAG_RE = re.compile(r"</?\s*untrusted_data\s*>", re.IGNORECASE)
-
-
-def wrap_untrusted(text: str) -> str:
-    """Mark tool output as data for the model. Any tag inside the text is removed
-    first, so data cannot close the block early and 'escape' into instructions."""
-    return f"<untrusted_data>\n{_TAG_RE.sub('', text)}\n</untrusted_data>"

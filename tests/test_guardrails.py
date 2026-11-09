@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from common.untrusted import wrap_untrusted
 from orders_agent.guardrails import (
     EMAIL_REDACTED,
     NOTE_WITHHELD,
@@ -11,7 +12,6 @@ from orders_agent.guardrails import (
     looks_like_injection,
     redact_pii,
     sanitize_order,
-    wrap_untrusted,
 )
 from store_api.data import INJECTION_NOTES, seed_orders
 
