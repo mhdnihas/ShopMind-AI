@@ -41,6 +41,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from common.settings import get_settings
 from orchestrator.graph import APPROVE, REJECT, build_agents
+from orchestrator.persistence import open_checkpointer
 from orchestrator.tools import RunContext
 
 log = logging.getLogger("orchestrator")
@@ -100,10 +101,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if app.state.graph is None:
-            app.state.graphs = await build_agents(settings=settings)
+        if app.state.graph is not None:  # injected by tests
+            yield
+            return
+        async with open_checkpointer(settings.database_url) as checkpointer:
+            app.state.graphs = await build_agents(settings=settings, checkpointer=checkpointer)
             app.state.graph = next(iter(app.state.graphs.values()))
-        yield
+            yield
 
     app = FastAPI(title="ShopHub chat API", lifespan=lifespan)
     app.state.graph = graph  # the default model's graph

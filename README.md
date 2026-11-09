@@ -16,8 +16,9 @@ caller's own bearer token.
 | 5 — LangGraph orchestrator (R1) | ✅ Done |
 | 6 — Human approval for refunds and cancels (R5) | ✅ Done |
 | 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
-| 8 — PostgreSQL persistence (R7) | ⏳ Next |
-| 9+ — Evals, Docker, DESIGN.md | Planned |
+| 8 — PostgreSQL persistence (R7) | ✅ Done |
+| 9 — Test review (R8) | ⏳ Next |
+| 10+ — Evals, Docker, DESIGN.md | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -189,8 +190,7 @@ approver's own merchant is what the store checks.
 
 ### Chat API (R6)
 
-Needs the store and the sub-agent running first. Conversations are held in memory until
-PostgreSQL is added.
+Needs the store and the sub-agent running first, and PostgreSQL (see below).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -229,6 +229,26 @@ the escaped JSON:
 ```bash
 curl.exe -N -X POST http://localhost:8000/chat -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"message\":\"1042\",\"thread_id\":\"demo\"}'
 ```
+
+### Persistence (R7)
+
+Conversations and waiting proposals are saved in PostgreSQL, so they survive a restart of the
+chat API. Create the database once, as a PostgreSQL admin (for example in pgAdmin):
+
+```sql
+CREATE USER shopmind WITH PASSWORD 'shopmind';
+CREATE DATABASE shopmind OWNER shopmind;
+```
+
+The tables are created at startup. If PostgreSQL cannot be reached the chat API stops with a
+clear error. To run without it, set `DATABASE_URL=` (empty); conversations are then lost on
+restart.
+
+To see it work: ask for a refund, stop `python -m orchestrator` with `Ctrl+C`, start it again,
+then approve the same proposal. Restart only the chat API, because the mock store keeps its
+orders in memory.
+
+The bearer token is never saved. Tests that need a database skip themselves if there is none.
 
 ## Layout
 
