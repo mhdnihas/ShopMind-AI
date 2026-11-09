@@ -18,8 +18,9 @@ caller's own bearer token.
 | 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
 | 8 — PostgreSQL persistence (R7) | ✅ Done |
 | 9 — Test review (R8) | ✅ Done |
-| 10 — Evaluation harness (R9) | ⏳ Next |
-| 11+ — Docker, DESIGN.md | Planned |
+| 10 — Evaluation harness (R9) | ✅ Done |
+| 11 — Docker Compose (R10) | ⏳ Next |
+| 12 — README and DESIGN.md (R11) | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -69,6 +70,22 @@ pytest -k cancel -v    # only tests whose name contains "cancel"
 The suite runs offline with no API key: the store and sub-agent run in-process and only the
 model is scripted. Tests that need PostgreSQL or the Gemini package skip themselves when those
 are missing. Set `TEST_DATABASE_URL` to run the database tests against a specific server.
+
+## Running the evals (R9)
+
+Scripted conversations from `evals/cases.yaml`, reported pass or fail per case. No services,
+database or API key are needed, and fake mode is the default whatever `.env` says.
+
+```bash
+python -m evals                                  # every case, fake model
+python -m evals --kind injection                 # one kind of case
+python -m evals --case reads_one_order           # one case
+python -m evals --provider google --kind injection  # on real Gemini (uses your quota)
+```
+
+The exit code is 0 if every case passed and 1 if any failed. Each case runs through the real
+chat API, graph, sub-agent and store with a fresh store. Fake mode proves the system around the
+model; only `--provider google` tests a real model's behaviour.
 
 ## Mock store API (R0)
 

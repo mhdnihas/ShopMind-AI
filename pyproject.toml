@@ -42,6 +42,7 @@ include = ["common*", "store_api*", "orders_agent*", "orchestrator*", "evals*"]
 
 [tool.setuptools.package-data]
 orchestrator = ["static/*"]
+evals = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
