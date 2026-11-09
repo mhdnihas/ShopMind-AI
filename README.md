@@ -14,8 +14,9 @@ caller's own bearer token.
 | 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
 | 4 — LLM factory + fake LLM | ✅ Done |
 | 5 — LangGraph orchestrator (R1) | ✅ Done |
-| 6 — Human approval for refunds and cancels (R5) | ⏳ Next |
-| 7+ — Streaming, persistence, evals, Docker | Planned |
+| 6 — Human approval for refunds and cancels (R5) | ✅ Done |
+| 7 — Chat API and SSE streaming (R6, R4c) | ⏳ Next |
+| 8+ — Persistence, evals, Docker | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -169,6 +170,19 @@ calls, and the results go back to the model until it answers in text.
 - **The token travels in LangGraph's run context** (`RunContext`). It is not a tool argument,
   so the model never sees it. It is not in `configurable` either, because those values are
   copied into checkpoint metadata and would end up in the database.
+
+### Human approval (R5)
+
+A refund or cancel never runs straight away:
+
+1. The model calls the read-only `preview_action`.
+2. If the action is possible, the graph pauses with LangGraph's `interrupt()` and returns the
+   proposal: order, merchant, what changes and the amount.
+3. Resuming with `Command(resume="approve")` runs the change. Any other value changes nothing.
+
+After a decision the outcome is written by code, not the model, so what happened to the money
+is never paraphrased. The token is passed again on resume, because it is never saved, so the
+approver's own merchant is what the store checks.
 
 ## Layout
 

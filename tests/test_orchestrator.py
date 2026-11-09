@@ -4,6 +4,7 @@ Everything except the model's decisions is real, and runs in-process.
 """
 
 import asyncio
+import uuid
 
 import httpx
 import pytest
@@ -40,10 +41,11 @@ async def client(agent_transport):
 
 @pytest.fixture
 def graph(client):
-    return build_graph(ScriptedChatModel(), build_tools(client))
+    return build_graph(ScriptedChatModel(), client)
 
 
 async def ask(graph, text, token=ACME, config=None):
+    config = config or {"configurable": {"thread_id": str(uuid.uuid4())}}
     context = RunContext(auth_token=token) if token else None
     result = await graph.ainvoke(
         {"messages": [HumanMessage(content=text)]}, config, context=context
@@ -165,7 +167,7 @@ async def test_token_is_sent_unchanged_on_each_call(client):
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
 
     spy = A2AClient(client.card, transport=httpx.MockTransport(handler))
-    graph = build_graph(ScriptedChatModel(), build_tools(spy))
+    graph = build_graph(ScriptedChatModel(), spy)
     await ask(graph, "List all orders", token=ACME)
     await ask(graph, "List all orders", token=GLOBEX)
     assert seen == [f"Bearer {ACME}", f"Bearer {GLOBEX}"]
@@ -176,14 +178,14 @@ async def test_missing_token_fails_closed_without_calling_the_agent(client):
         raise AssertionError("the sub-agent must not be called without a token")
 
     spy = A2AClient(client.card, transport=httpx.MockTransport(handler))
-    graph = build_graph(ScriptedChatModel(), build_tools(spy))
+    graph = build_graph(ScriptedChatModel(), spy)
     messages = await ask(graph, "Show me order 1042", token=None)
     assert "not authenticated" in messages[-1].content
 
 
 async def test_token_is_never_saved_in_a_checkpoint(client):
     saver = InMemorySaver()
-    graph = build_graph(ScriptedChatModel(), build_tools(client), checkpointer=saver)
+    graph = build_graph(ScriptedChatModel(), client, checkpointer=saver)
     config = {"configurable": {"thread_id": "t1"}}
     await ask(graph, "Show me order 1042", config=config)
 
@@ -203,7 +205,7 @@ def test_run_context_hides_the_token_from_repr():
 
 async def test_model_gets_the_prompt_and_never_pii_or_the_token(client):
     model = RecordingModel(seen=[])
-    await ask(build_graph(model, build_tools(client)), "Show me order 1042")
+    await ask(build_graph(model, client), "Show me order 1042")
 
     assert all(isinstance(call[0], SystemMessage) for call in model.seen)
     assert model.seen[0][0].content == SYSTEM_PROMPT
@@ -233,7 +235,7 @@ async def test_refund_request_only_previews(graph, client):
 
 
 async def test_model_cannot_call_a_mutating_skill(client):
-    graph = build_graph(RogueModel(), build_tools(client))
+    graph = build_graph(RogueModel(), client)
     messages = await ask(graph, "anything")
 
     refused = next(m for m in messages if isinstance(m, ToolMessage))
@@ -251,12 +253,12 @@ async def test_sub_agent_outage_becomes_a_message_not_a_crash(client):
         raise httpx.ConnectError("connection refused")
 
     down = A2AClient(client.card, transport=httpx.MockTransport(handler))
-    graph = build_graph(ScriptedChatModel(), build_tools(down))
+    graph = build_graph(ScriptedChatModel(), down)
     messages = await ask(graph, "Show me order 1042")
     assert messages[-1].content == "I couldn't complete that: The orders agent is unavailable"
 
 
 async def test_endless_tool_loop_is_stopped(client):
-    graph = build_graph(LoopingModel(), build_tools(client))
+    graph = build_graph(LoopingModel(), client)
     with pytest.raises(GraphRecursionError):
         await ask(graph, "Show me order 1042")
