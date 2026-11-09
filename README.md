@@ -12,8 +12,9 @@ caller's own bearer token.
 | 1 — Mock store API (R0) | ✅ Done |
 | 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
 | 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
-| 4 — LLM factory + fake LLM | ⏳ Next |
-| 5+ — Orchestrator, HITL, streaming, persistence, evals, Docker | Planned |
+| 4 — LLM factory + fake LLM | ✅ Done |
+| 5 — LangGraph orchestrator (R1) | ⏳ Next |
+| 6+ — HITL, streaming, persistence, evals, Docker | Planned |
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -142,6 +143,19 @@ unknown method, invalid params, missing token) as JSON-RPC `error` objects.
 curl.exe -s http://localhost:8001/.well-known/agent-card.json
 curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"preview_action\",\"params\":{\"action\":\"refund\",\"order_id\":1042}}'
 ```
+
+## Choosing the model
+
+All model creation goes through `get_chat_model()` in `orchestrator/llm.py`.
+
+| `LLM_PROVIDER` | Model | Needs |
+|---|---|---|
+| `fake` (default) | `ScriptedChatModel`: fixed rules, real `tool_calls`, repeatable output | Nothing |
+| `anthropic` | `ChatAnthropic`, using `ANTHROPIC_MODEL` | `pip install -e ".[anthropic]"` and `ANTHROPIC_API_KEY` |
+
+The fake model is deliberately gullible: if injection text reaches it, it obeys and calls
+`refund_order`, so a guardrail failure fails a test. It proves the system around the model,
+not how well a real model chooses tools or resists injection.
 
 ## Layout
 
