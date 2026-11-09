@@ -342,6 +342,29 @@ async def test_endless_loop_becomes_an_error_event(a2a, store):
     )
 
 
+# --- web page ------------------------------------------------------------------------
+
+
+async def test_web_page_is_served_with_a_strict_csp(http):
+    response = await http.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert "/static/app.js" in response.text
+
+
+@pytest.mark.parametrize("path", ["/static/app.js", "/static/styles.css"])
+async def test_web_assets_are_served(http, path):
+    assert (await http.get(path)).status_code == 200
+
+
+async def test_web_script_never_builds_html_from_text(http):
+    script = (await http.get("/static/app.js")).text
+    assert "innerHTML" not in script
+    assert "insertAdjacentHTML" not in script
+    assert "localStorage" not in script  # the token is not kept in the browser
+
+
 async def test_healthz_needs_no_token(http):
     response = await http.get("/healthz")
     assert response.status_code == 200

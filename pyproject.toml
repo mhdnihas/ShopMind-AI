@@ -40,6 +40,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["common*", "store_api*", "orders_agent*", "orchestrator*", "evals*"]
 
+[tool.setuptools.package-data]
+orchestrator = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

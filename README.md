@@ -211,13 +211,16 @@ Stream events: `token`, `tool_started`, `tool_finished`, `proposal`, `done`, `er
 Each thread belongs to the caller's merchant: the real key is `merchant:thread_id`, so the
 same `thread_id` from another merchant is a separate conversation.
 
-Chat from the terminal, answering `a` or `r` when a proposal appears:
+Chat in the browser at **http://localhost:8000/**. Pick a demo account at the top; refunds and
+cancels appear as a card with Approve and Reject.
+
+Or chat from the terminal, answering `a` or `r` when a proposal appears:
 
 ```bash
 python -m orchestrator.client --token tok_acme_alice
 ```
 
-Or with curl. In Windows PowerShell 5.1 keep the message to one word, because spaces break
+With curl: in Windows PowerShell 5.1 keep the message to one word, because spaces break
 the escaped JSON:
 
 ```bash

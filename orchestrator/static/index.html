@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShopMind Support</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">S</span>
+        <div>
+          <h1>ShopMind</h1>
+          <p>Order support assistant</p>
+        </div>
+      </div>
+      <div class="controls">
+        <label class="account">
+          <span>Signed in as</span>
+          <!-- Demo accounts: these are the mock store's fake seed tokens. -->
+          <select id="account">
+            <option value="tok_acme_alice">Alice, Acme Outdoor</option>
+            <option value="tok_globex_bob">Bob, Globex Home</option>
+            <option value="tok_orphan_carol">Carol, no store</option>
+          </select>
+        </label>
+        <button id="new-chat" type="button" class="button ghost">New chat</button>
+      </div>
+    </header>
+
+    <main id="chat" class="chat">
+      <div id="messages" class="messages" aria-live="polite"></div>
+    </main>
+
+    <footer class="composer-area">
+      <form id="composer" class="composer">
+        <label class="visually-hidden" for="input">Message</label>
+        <textarea
+          id="input"
+          rows="1"
+          maxlength="4000"
+          placeholder="Ask about an order"
+          autocomplete="off"
+        ></textarea>
+        <button id="send" type="submit" class="button primary">Send</button>
+      </form>
+      <p id="hint" class="hint"></p>
+    </footer>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

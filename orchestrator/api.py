@@ -20,6 +20,7 @@ The caller's token is only ever passed on, unchanged, through the run context (R
 import asyncio
 import json
 import logging
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -28,7 +29,9 @@ from weakref import WeakValueDictionary
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph.state import CompiledStateGraph
@@ -41,6 +44,10 @@ from orchestrator.graph import APPROVE, REJECT, build_agent
 from orchestrator.tools import RunContext
 
 log = logging.getLogger("orchestrator")
+
+STATIC_DIR = pathlib.Path(__file__).parent / "static"
+# The page shows untrusted text, so even if some got rendered as HTML no script could run.
+CSP = "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 THREAD_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 ThreadId = Annotated[str, Path(pattern=THREAD_ID_PATTERN)]
@@ -180,6 +187,12 @@ def create_app(
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict:
         return {"ok": True}
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def web_chat() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html", headers={"Content-Security-Policy": CSP})
 
     @app.post("/chat")
     async def chat(body: ChatRequest, caller: CallerDep) -> EventSourceResponse:
