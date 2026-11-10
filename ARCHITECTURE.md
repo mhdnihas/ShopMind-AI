@@ -2,6 +2,44 @@
 
 Trade-offs and reasoning are in [DESIGN.md](DESIGN.md).
 
+## Minimal architecture
+
+```mermaid
+flowchart TD
+    card["BEFORE ANY CHAT<br/>Orchestrator reads the sub-agent's agent card with the A2A SDK<br/>and learns its skills: list orders, get order, refund, cancel"]
+
+    s1["Step 1: User asks a question<br/>and sends a bearer token"]
+    s2["Step 2: Orchestrator receives it"]
+    s3["Step 3: LLM decides which skill to use"]
+    d{"Is it a refund<br/>or a cancel?"}
+    ok["A person must click Approve"]
+    s4["Step 4: Orchestrator calls the skill<br/>on the sub-agent, using the A2A SDK<br/>and the same bearer token"]
+    s5["Step 5: Sub-agent calls the Store API<br/>with the same bearer token"]
+    s6["Step 6: Store API returns only<br/>that merchant's orders"]
+    s7["Step 7: Sub-agent runs guardrails<br/>hides email and phone, removes injected notes"]
+    s8["Step 8: Safe result goes back to the orchestrator<br/>and the LLM writes the answer"]
+    s9["Step 9: User sees the answer"]
+
+    card -.-> s3
+    s1 --> s2 --> s3 --> d
+    d -->|"No"| s4
+    d -->|"Yes"| ok --> s4
+    s4 --> s5 --> s6 --> s7 --> s8 --> s9
+
+    classDef person fill:#dbeafe,stroke:#2563eb,color:#111827
+    classDef orchestrator fill:#dcfce7,stroke:#16a34a,color:#111827
+    classDef subagent fill:#fef3c7,stroke:#d97706,color:#111827
+    classDef store fill:#f3e8ff,stroke:#9333ea,color:#111827
+
+    class s1,s9,ok person
+    class card,s2,s3,d,s4,s8 orchestrator
+    class s5,s7 subagent
+    class s6 store
+```
+
+Colours: blue is the person, green is the orchestrator, yellow is the sub-agent, purple is the
+store.
+
 ## Overall architecture
 
 ```mermaid
