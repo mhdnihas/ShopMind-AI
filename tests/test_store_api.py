@@ -3,7 +3,14 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from store_api.data import INJECTION_NOTES, MERCHANTS, seed_orders
+from store_api.data import (
+    INJECTION_NOTES,
+    MERCHANTS,
+    InvalidTransition,
+    OrderStatus,
+    Store,
+    seed_orders,
+)
 from store_api.main import create_app
 
 ACME = {"Authorization": "Bearer tok_acme_alice"}
@@ -124,6 +131,41 @@ def test_cancel_rules(client):
 
 def _order(client, order_id, headers=ACME):
     return client.get("/orders/lookup", params={"id": order_id}, headers=headers).json()["order"]
+
+
+@pytest.mark.parametrize(
+    ("action", "status", "new_status"),
+    [
+        ("refund", "PLACED", None),
+        ("refund", "PAID", "REFUNDED"),
+        ("refund", "SHIPPED", "REFUNDED"),
+        ("refund", "DELIVERED", "REFUNDED"),
+        ("refund", "CANCELLED", None),
+        ("refund", "REFUNDED", None),
+        ("cancel", "PLACED", "CANCELLED"),
+        ("cancel", "PAID", "CANCELLED"),
+        ("cancel", "SHIPPED", None),
+        ("cancel", "DELIVERED", None),
+        ("cancel", "CANCELLED", None),
+        ("cancel", "REFUNDED", None),
+    ],
+)
+def test_every_status_transition(action, status, new_status):
+    order = seed_orders()[ACME_ORDER].model_copy(update={"status": OrderStatus(status)})
+    store = Store({ACME_ORDER: order})
+    run = getattr(store, action)
+    if new_status:
+        assert run("m_acme", ACME_ORDER).status == new_status
+    else:
+        with pytest.raises(InvalidTransition):
+            run("m_acme", ACME_ORDER)
+        assert store.get("m_acme", ACME_ORDER).status == status
+
+
+def test_orphan_token_is_refused_on_the_legacy_lookup(client):
+    response = client.get("/orders/lookup", params={"id": ACME_ORDER}, headers=ORPHAN)
+    assert response.status_code == 200
+    assert response.json() == {"status": False, "message": "Not authorised for any store"}
 
 
 def test_seed_money_fields(client):

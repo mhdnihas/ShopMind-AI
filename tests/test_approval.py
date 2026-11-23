@@ -224,6 +224,31 @@ async def test_two_proposals_change_nothing_until_both_are_decided(client, threa
     assert "did not refund order 1001" in final["messages"][-1].content
 
 
+async def test_preview_alongside_another_tool_still_pauses(client, thread):
+    class MixedModel(ScriptedChatModel):
+        def _generate(self, messages, *args, **kwargs):
+            calls = [
+                {"name": "get_order", "args": {"order_id": 1001}, "id": "a", "type": "tool_call"},
+                {
+                    "name": "preview_action",
+                    "args": {"action": "refund", "order_id": 1042},
+                    "id": "b",
+                    "type": "tool_call",
+                },
+            ]
+            reply = AIMessage(content="", tool_calls=calls)
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    graph = build_graph(MixedModel(), client)
+    paused = await ask(graph, thread, "show one and refund another")
+    assert paused["__interrupt__"][0].value["order_id"] == 1042
+    assert (await order(client, 1042))["status"] == "PAID"
+
+    result = await decide(graph, thread, APPROVE)
+    assert "Order 1042 is now REFUNDED" in result["messages"][-1].content
+    assert (await order(client, 1001))["status"] == "PAID"  # the read-only call changed nothing
+
+
 async def test_a_new_graph_can_resume_a_saved_pause(graph, thread, saver, client):
     await ask(graph, thread, "Please refund order 1042")
 

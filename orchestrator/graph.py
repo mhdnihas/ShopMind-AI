@@ -130,17 +130,32 @@ def build_graph(
     return compiled.with_config(recursion_limit=RECURSION_LIMIT)
 
 
-async def build_agent(
+async def build_agents(
     *,
     settings: Settings | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
-) -> CompiledStateGraph:
-    """Discover the sub-agent from its card and assemble the graph."""
+) -> dict[str, CompiledStateGraph]:
+    """Discover the sub-agent from its card and build one graph per selectable model.
+
+    The default model comes first. All graphs share one checkpointer, so a conversation
+    carries on when someone switches model.
+    """
     settings = settings or get_settings()
     client = await A2AClient.discover(
         settings.orders_agent_url,
         timeout=settings.http_timeout_seconds,
         transport=transport,
     )
-    return build_graph(get_chat_model(settings), client, checkpointer)
+    saver = checkpointer or InMemorySaver()
+    return {
+        name: build_graph(
+            get_chat_model(settings.model_copy(update={"google_model": name})), client, saver
+        )
+        for name in settings.selectable_models
+    }
+
+
+async def build_agent(**kwargs: Any) -> CompiledStateGraph:
+    """The graph for the default model."""
+    return next(iter((await build_agents(**kwargs)).values()))

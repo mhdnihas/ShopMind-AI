@@ -80,11 +80,23 @@ def test_google_model_is_configured_from_settings():
     assert chat.model.endswith("m-1")
     assert chat.google_api_key.get_secret_value() == "not-a-real-key"
     assert chat.temperature == 0.0
+    assert chat.api_version == "v1beta"  # preview models 404 on the default version
     assert chat.timeout == 60.0
     assert chat.max_retries == 2
     assert chat.max_output_tokens == 16000
     assert "not-a-real-key" not in repr(chat)
     chat.bind_tools(TOOLS)  # the real tool schemas are accepted without a network call
+
+
+def test_selectable_models_put_the_default_first_without_repeats():
+    chosen = settings(
+        llm_provider="google", google_model="a", google_extra_models="b, a ,c,"
+    ).selectable_models
+    assert chosen == ["a", "b", "c"]
+
+
+def test_fake_mode_has_one_selectable_model():
+    assert settings().selectable_models == ["fake"]
 
 
 # --- choosing a tool -----------------------------------------------------------

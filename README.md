@@ -1,23 +1,42 @@
 # ShopMind AI — ShopHub order-support assistant
 
 Multi-tenant support assistant for ShopHub merchant staff: a LangGraph orchestrator that
-talks to an orders sub-agent over JSON-RPC 2.0, which calls a mock store API with the
-caller's own bearer token.
+talks to an orders sub-agent over Google's A2A protocol (`a2a-sdk`), which calls a mock store
+API with the caller's own bearer token.
 
-> Work in progress — built phase by phase. Sections are added as each phase lands.
+See [DESIGN.md](DESIGN.md) for the architecture, trade-offs and what was cut.
 
-| Phase | Status |
-|---|---|
-| 0 — Project skeleton, config | ✅ Done |
-| 1 — Mock store API (R0) | ✅ Done |
-| 2 — Order tools + guardrails (R1 envelope, R4a/b) | ✅ Done |
-| 3 — Orders sub-agent over JSON-RPC + agent card (R2, R3) | ✅ Done |
-| 4 — LLM factory + fake LLM | ✅ Done |
-| 5 — LangGraph orchestrator (R1) | ✅ Done |
-| 6 — Human approval for refunds and cancels (R5) | ✅ Done |
-| 7 — Chat API and SSE streaming (R6, R4c) | ✅ Done |
-| 8 — PostgreSQL persistence (R7) | ⏳ Next |
-| 9+ — Evals, Docker, DESIGN.md | Planned |
+**Model provider:** Google Gemini, through LangChain, behind one factory
+(`orchestrator/llm.py`). A scripted fake model is the default and needs no API key.
+
+**Status:** R0 to R9 and R11 are done and tested. R10 (Docker) is written but has not been run
+yet; see [Docker](#docker).
+
+## Quick start in fake-LLM mode
+
+No API key is needed. These are the exact commands.
+
+```bash
+pip install -e ".[dev]"   # after activating a virtual environment (see Setup)
+pytest                    # the tests
+python -m evals           # the eval harness
+```
+
+To run the chat with the fake model, start the services below with this in the chat API's
+terminal (`DATABASE_URL=` keeps conversations in memory, so PostgreSQL is not needed):
+
+```bash
+$env:LLM_PROVIDER="fake"; $env:DATABASE_URL=" "; python -m orchestrator
+```
+
+On Linux or macOS:
+
+```bash
+LLM_PROVIDER=fake DATABASE_URL= python -m orchestrator
+```
+
+Windows PowerShell removes a variable set to an empty string, so the PowerShell command uses a
+single space.
 
 ## Setup (fake-LLM mode — no API key needed)
 
@@ -44,7 +63,7 @@ virtual environment in each. Start the store first, because the sub-agent calls 
 | 3 — Chat API | `python -m orchestrator` | http://localhost:8000 |
 
 Each one prints `Uvicorn running on http://127.0.0.1:<port>` when ready; stop it with
-`Ctrl+C`. Then check them from a third terminal:
+`Ctrl+C`. Then check them from another terminal:
 
 ```bash
 curl.exe http://localhost:8002/healthz
@@ -56,6 +75,19 @@ curl.exe http://localhost:8001/.well-known/agent-card.json
 The agent card is served by the running sub-agent and built from the code in
 `orders_agent/skills.py` — it is a URL, not a file in the repository.
 
+## Docker
+
+```bash
+docker compose up --build
+```
+
+This is meant to start the store, PostgreSQL, the sub-agent and the chat API on the fake model
+with no setup, then serve the chat at http://localhost:8000/. For Gemini, put
+`LLM_PROVIDER=google` and `GOOGLE_API_KEY` in `.env`.
+
+**Not verified yet.** The compose file validates, but no image has been built or run. See
+[DESIGN.md](DESIGN.md).
+
 ## Running the tests
 
 ```bash
@@ -63,6 +95,26 @@ pytest                 # whole suite, no API key needed
 pytest -v              # one line per test
 pytest -k cancel -v    # only tests whose name contains "cancel"
 ```
+
+The suite runs offline with no API key: the store and sub-agent run in-process and only the
+model is scripted. Tests that need PostgreSQL or the Gemini package skip themselves when those
+are missing. Set `TEST_DATABASE_URL` to run the database tests against a specific server.
+
+## Running the evals (R9)
+
+Scripted conversations from `evals/cases.yaml`, reported pass or fail per case. No services,
+database or API key are needed, and fake mode is the default whatever `.env` says.
+
+```bash
+python -m evals                                  # every case, fake model
+python -m evals --kind injection                 # one kind of case
+python -m evals --case reads_one_order           # one case
+python -m evals --provider google --kind injection  # on real Gemini (uses your quota)
+```
+
+The exit code is 0 if every case passed and 1 if any failed. Each case runs through the real
+chat API, graph, sub-agent and store with a fresh store. Fake mode proves the system around the
+model; only `--provider google` tests a real model's behaviour.
 
 ## Mock store API (R0)
 
@@ -115,21 +167,23 @@ curl.exe -X POST -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: app
 
 ## Orders sub-agent (R2)
 
-Owns the order tools and the guardrails. Reached over JSON-RPC 2.0; the orchestrator
-discovers it from its agent card and never imports its code. Needs the store API running
-(viewing the agent card does not).
+Owns the order tools and the guardrails. Reached over Google's A2A protocol 1.0, using the
+official `a2a-sdk` on both sides; the orchestrator discovers it from its agent card and never
+imports its code. Needs the store API running (viewing the agent card does not).
 
 ```bash
 python -m orders_agent   # http://localhost:8001   (override with HOST / PORT)
 ```
 
-All skills go through the single `POST /` endpoint, so use curl rather than the `/docs` page
-to try them.
-
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/.well-known/agent-card.json` | Agent card: name, endpoint, skills with JSON Schemas (public, no token) |
-| POST | `/` | JSON-RPC 2.0 — `method` is a skill id, `params` an object |
+| GET | `/.well-known/agent-card.json` | A2A agent card (public, no token) |
+| POST | `/` | A2A JSON-RPC binding: `SendMessage` with the `A2A-Version: 1.0` header |
+
+A skill call is an A2A message with one data part, `{"skill": "<id>", "params": {...}}`, and the
+reply is an A2A agent message whose data part is `{"ok", "data", "error"}`. A standard A2A skill
+has no field for argument schemas or "this changes data", so the card publishes both through an
+A2A extension (`urn:shopmind:a2a:skill-schemas:v1`).
 
 | Skill | Mutating | Purpose |
 |---|---|---|
@@ -141,12 +195,12 @@ to try them.
 
 Every order is sanitized before it is returned: emails/phones redacted, instruction-like
 customer notes withheld (`note_flagged: true`). Business failures (not found, 409, store
-down) come back as `result: {"ok": false, "error": ...}`; protocol failures (bad JSON,
-unknown method, invalid params, missing token) as JSON-RPC `error` objects.
+down) come back as a normal reply with `{"ok": false, "error": ...}`; protocol failures (bad
+JSON, unknown skill, invalid params, missing token) as A2A errors.
 
 ```bash
 curl.exe -s http://localhost:8001/.well-known/agent-card.json
-curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"preview_action\",\"params\":{\"action\":\"refund\",\"order_id\":1042}}'
+curl.exe -s -X POST http://localhost:8001/ -H "Authorization: Bearer tok_acme_alice" -H "A2A-Version: 1.0" -H "Content-Type: application/json" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"SendMessage\",\"params\":{\"message\":{\"messageId\":\"m1\",\"role\":\"ROLE_USER\",\"parts\":[{\"data\":{\"skill\":\"get_order\",\"params\":{\"order_id\":1042}}}]}}}'
 ```
 
 ## Choosing the model
@@ -189,12 +243,12 @@ approver's own merchant is what the store checks.
 
 ### Chat API (R6)
 
-Needs the store and the sub-agent running first. Conversations are held in memory until
-PostgreSQL is added.
+Needs the store and the sub-agent running first, and PostgreSQL (see below).
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/chat` | `{"message": "...", "thread_id": "..."}`; the reply streams over SSE |
+| POST | `/chat` | `{"message": "...", "thread_id": "..."}` and an optional `"model"`; the reply streams over SSE |
+| GET | `/models` | The models that can be selected, default first |
 | POST | `/chat/{thread_id}/approve` | Approve the waiting proposal; the result streams |
 | POST | `/chat/{thread_id}/reject` | Reject it; the result streams |
 | GET | `/healthz` | Liveness check |
@@ -211,25 +265,50 @@ Stream events: `token`, `tool_started`, `tool_finished`, `proposal`, `done`, `er
 Each thread belongs to the caller's merchant: the real key is `merchant:thread_id`, so the
 same `thread_id` from another merchant is a separate conversation.
 
-Chat from the terminal, answering `a` or `r` when a proposal appears:
+Chat in the browser at **http://localhost:8000/**. Pick a demo account at the top; refunds and
+cancels appear as a card with Approve and Reject. With `LLM_PROVIDER=google` a model picker
+also appears, so you can switch model in the middle of a conversation if one reaches its
+usage limit.
+
+Or chat from the terminal, answering `a` or `r` when a proposal appears:
 
 ```bash
 python -m orchestrator.client --token tok_acme_alice
 ```
 
-Or with curl. In Windows PowerShell 5.1 keep the message to one word, because spaces break
+With curl: in Windows PowerShell 5.1 keep the message to one word, because spaces break
 the escaped JSON:
 
 ```bash
 curl.exe -N -X POST http://localhost:8000/chat -H "Authorization: Bearer tok_acme_alice" -H "Content-Type: application/json" -d '{\"message\":\"1042\",\"thread_id\":\"demo\"}'
 ```
 
+### Persistence (R7)
+
+Conversations and waiting proposals are saved in PostgreSQL, so they survive a restart of the
+chat API. Create the database once, as a PostgreSQL admin (for example in pgAdmin):
+
+```sql
+CREATE USER shopmind WITH PASSWORD 'shopmind';
+CREATE DATABASE shopmind OWNER shopmind;
+```
+
+The tables are created at startup. If PostgreSQL cannot be reached the chat API stops with a
+clear error. If your server is not on port 5432, change the port in `DATABASE_URL`. To run
+without it, set `DATABASE_URL=` (empty); conversations are then lost on restart.
+
+To see it work: ask for a refund, stop `python -m orchestrator` with `Ctrl+C`, start it again,
+then approve the same proposal. Restart only the chat API, because the mock store keeps its
+orders in memory.
+
+The bearer token is never saved. Tests that need a database skip themselves if there is none.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
 | `store_api/` | R0 mock store API (port 8002) |
-| `orders_agent/` | R2 orders sub-agent, JSON-RPC + agent card (port 8001) |
+| `orders_agent/` | R2 orders sub-agent on the A2A protocol (port 8001) |
 | `orchestrator/` | LangGraph orchestrator + SSE chat API (port 8000) |
 | `common/` | Shared configuration (`common/settings.py`, read from env / `.env`) and the untrusted-data marker |
 | `evals/` | R9 evaluation harness |
@@ -243,7 +322,8 @@ All settings come from environment variables (see `.env.example`). Never commit 
 |---|---|---|
 | `LLM_PROVIDER` | `fake` | `fake` (offline, scripted) or `google` |
 | `GOOGLE_API_KEY` | — | Only needed when `LLM_PROVIDER=google` |
-| `GOOGLE_MODEL` | `gemini-3.6-flash` | Model name for the real provider |
+| `GOOGLE_MODEL` | `gemini-3.1-flash-lite` | Default model for the real provider |
+| `GOOGLE_EXTRA_MODELS` | `gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-3.6-flash` | Other models the web page can switch to |
 | `STORE_API_URL` | `http://localhost:8002` | Store API base URL |
 | `ORDERS_AGENT_URL` | `http://localhost:8001` | Orders sub-agent base URL (also the endpoint published in its card) |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Timeout for each call between services |

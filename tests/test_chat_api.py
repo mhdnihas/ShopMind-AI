@@ -11,9 +11,19 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langgraph.checkpoint.memory import InMemorySaver
 
 from orchestrator.a2a_client import A2AClient
-from orchestrator.api import BUSY, OUT_OF_DATE, TOO_MANY_STEPS, UNAVAILABLE, create_app
+from orchestrator.api import (
+    BUSY,
+    OUT_OF_DATE,
+    RATE_LIMITED,
+    TOO_MANY_STEPS,
+    UNAVAILABLE,
+    Caller,
+    ChatRequest,
+    create_app,
+)
 from orchestrator.client import parse_events
 from orchestrator.fake_llm import ScriptedChatModel
 from orchestrator.graph import build_graph
@@ -313,6 +323,22 @@ async def test_state_is_checked_again_once_the_conversation_is_held(http, a2a, m
     assert "is now REFUNDED" in text_of(await decide(http, "approve"))  # proposal survived
 
 
+async def test_abandoned_stream_frees_the_conversation(a2a, store):
+    """A client that disconnects mid-turn must not leave the conversation locked."""
+    api = create_app(
+        graph=build_graph(ScriptedChatModel(), a2a), store_url=STORE, store_transport=store
+    )
+    endpoint = next(r.endpoint for r in api.routes if getattr(r, "path", "") == "/chat")
+    body = ChatRequest(message="Show me order 1042", thread_id="gone")
+    response = await endpoint(body, Caller(token=ACME, merchant="m_acme"))
+    stream = response.body_iterator
+    await anext(stream)  # the turn is running and holds the conversation
+    await stream.aclose()  # the client went away
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://chat.test")
+    assert names(await chat(http, "Hello there", thread="gone"))[-1] == "done"
+
+
 # --- failures become events ----------------------------------------------------------
 
 
@@ -340,6 +366,112 @@ async def test_endless_loop_becomes_an_error_event(a2a, store):
         "error",
         {"message": TOO_MANY_STEPS},
     )
+
+
+# --- choosing a model -----------------------------------------------------------------
+
+
+class TaggedModel(ScriptedChatModel):
+    """Replies with its own name, so a test can see which model answered."""
+
+    tag: str
+
+    def _generate(self, messages, *args, **kwargs):
+        reply = AIMessage(content=self.tag)
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+class GoogleRateLimitError(Exception):
+    """Same class name as the provider's error for a used-up quota."""
+
+
+class RateLimitedModel(ScriptedChatModel):
+    def _generate(self, messages, *args, **kwargs):
+        raise GoogleRateLimitError("quota detail")
+
+
+@pytest.fixture
+def multi(a2a, store):
+    saver = InMemorySaver()
+    graphs = {
+        "gemini-a-flash": build_graph(TaggedModel(tag="from-a"), a2a, saver),
+        "gemini-b-flash-lite": build_graph(TaggedModel(tag="from-b"), a2a, saver),
+        "limited": build_graph(RateLimitedModel(), a2a, saver),
+    }
+    api = create_app(
+        graph=graphs["gemini-a-flash"], graphs=graphs, store_url=STORE, store_transport=store
+    )
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://chat.test")
+
+
+async def chat_with(http, model, thread="m1"):
+    body = {"message": "Hello there", "thread_id": thread, "model": model}
+    return await http.post("/chat", json=body, headers=auth(ACME))
+
+
+async def test_models_are_listed_with_the_default_first(multi):
+    response = await multi.get("/models")
+    assert response.json()["models"][:2] == [
+        {"id": "gemini-a-flash", "label": "Gemini A Flash"},
+        {"id": "gemini-b-flash-lite", "label": "Gemini B Flash-Lite"},
+    ]
+
+
+async def test_requested_model_answers(multi):
+    assert text_of(await chat_with(multi, "gemini-b-flash-lite")) == "from-b"
+
+
+async def test_no_model_uses_the_default(multi):
+    assert text_of(await chat(multi, "Hello there")) == "from-a"
+
+
+async def test_model_outside_the_list_is_refused(multi):
+    response = await chat_with(multi, "gemini-pro-expensive")
+    assert response.status_code == 422
+
+
+async def test_switching_model_keeps_the_conversation(multi):
+    await chat_with(multi, "gemini-a-flash")
+    await chat_with(multi, "gemini-b-flash-lite")
+    state = await multi._transport.app.state.graph.aget_state(
+        {"configurable": {"thread_id": "m_acme:m1"}}
+    )
+    assert [m.content for m in state.values["messages"]] == [
+        "Hello there",
+        "from-a",
+        "Hello there",
+        "from-b",
+    ]
+
+
+async def test_used_up_quota_suggests_switching_then_another_model_works(multi):
+    limited = await chat_with(multi, "limited")
+    assert events(limited) == [("error", {"message": RATE_LIMITED})]
+    assert "quota detail" not in limited.text
+    assert text_of(await chat_with(multi, "gemini-b-flash-lite")) == "from-b"
+
+
+# --- web page ------------------------------------------------------------------------
+
+
+async def test_web_page_is_served_with_a_strict_csp(http):
+    response = await http.get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert "/static/app.js" in response.text
+
+
+@pytest.mark.parametrize("path", ["/static/app.js", "/static/styles.css"])
+async def test_web_assets_are_served(http, path):
+    assert (await http.get(path)).status_code == 200
+
+
+async def test_web_script_never_builds_html_from_text(http):
+    script = (await http.get("/static/app.js")).text
+    assert "innerHTML" not in script
+    assert "insertAdjacentHTML" not in script
+    assert "localStorage" not in script  # the token is not kept in the browser
 
 
 async def test_healthz_needs_no_token(http):

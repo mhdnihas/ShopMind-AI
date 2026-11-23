@@ -20,6 +20,7 @@ The caller's token is only ever passed on, unchanged, through the run context (R
 import asyncio
 import json
 import logging
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -28,7 +29,9 @@ from weakref import WeakValueDictionary
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph.state import CompiledStateGraph
@@ -37,15 +40,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 
 from common.settings import get_settings
-from orchestrator.graph import APPROVE, REJECT, build_agent
+from orchestrator.graph import APPROVE, REJECT, build_agents
+from orchestrator.persistence import open_checkpointer
 from orchestrator.tools import RunContext
 
 log = logging.getLogger("orchestrator")
 
+STATIC_DIR = pathlib.Path(__file__).parent / "static"
+# The page shows untrusted text, so even if some got rendered as HTML no script could run.
+CSP = "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
 THREAD_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 ThreadId = Annotated[str, Path(pattern=THREAD_ID_PATTERN)]
 
-UNAVAILABLE = "The assistant is temporarily unavailable. Please try again shortly."
+UNAVAILABLE = "No reply came from this model. Switch to another model or try again shortly."
+RATE_LIMITED = "This model has reached its usage limit. Switch to another model and send it again."
 TOO_MANY_STEPS = "That request took too many steps, so it was stopped."
 BUSY = "This conversation is already being processed."
 OUT_OF_DATE = "This conversation changed. Please try again."
@@ -56,6 +65,7 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=4000)
     thread_id: str = Field(pattern=THREAD_ID_PATTERN)
+    model: str | None = None  # one of GET /models; None means the default
 
 
 @dataclass(frozen=True)
@@ -68,6 +78,10 @@ def _sse(event: str, **data: Any) -> dict[str, str]:
     return {"event": event, "data": json.dumps(data)}
 
 
+def _model_label(name: str) -> str:
+    return name.replace("-", " ").title().replace("Flash Lite", "Flash-Lite")
+
+
 def _thread_config(caller: Caller, thread_id: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": f"{caller.merchant}:{thread_id}"}}
 
@@ -75,6 +89,7 @@ def _thread_config(caller: Caller, thread_id: str) -> dict[str, Any]:
 def create_app(
     *,
     graph: CompiledStateGraph | None = None,
+    graphs: dict[str, CompiledStateGraph] | None = None,
     store_url: str | None = None,
     store_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
@@ -86,12 +101,17 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if app.state.graph is None:
-            app.state.graph = await build_agent(settings=settings)
-        yield
+        if app.state.graph is not None:  # injected by tests
+            yield
+            return
+        async with open_checkpointer(settings.database_url) as checkpointer:
+            app.state.graphs = await build_agents(settings=settings, checkpointer=checkpointer)
+            app.state.graph = next(iter(app.state.graphs.values()))
+            yield
 
     app = FastAPI(title="ShopHub chat API", lifespan=lifespan)
-    app.state.graph = graph
+    app.state.graph = graph  # the default model's graph
+    app.state.graphs = graphs or {}  # every selectable model, default first
     bearer = HTTPBearer(auto_error=False)
 
     async def authenticate(
@@ -125,9 +145,8 @@ def create_app(
         return [item.value for task in state.tasks for item in task.interrupts]
 
     async def run_turn(
-        graph_input: Any, config: dict[str, Any], caller: Caller
+        agent: CompiledStateGraph, graph_input: Any, config: dict[str, Any], caller: Caller
     ) -> AsyncIterator[dict[str, str]]:
-        agent = app.state.graph
         streamed = False
         async for event in agent.astream_events(
             graph_input, config, context=RunContext(auth_token=caller.token), version="v2"
@@ -153,7 +172,12 @@ def create_app(
         yield _sse("done")
 
     async def events(
-        graph_input: Any, config: dict[str, Any], caller: Caller, *, expect_pending: bool
+        agent: CompiledStateGraph,
+        graph_input: Any,
+        config: dict[str, Any],
+        caller: Caller,
+        *,
+        expect_pending: bool,
     ) -> AsyncIterator[dict[str, str]]:
         key = config["configurable"]["thread_id"]
         lock = locks.setdefault(key, asyncio.Lock())
@@ -167,7 +191,7 @@ def create_app(
                 if bool(await pending_proposals(config)) != expect_pending:
                     yield _sse("error", message=OUT_OF_DATE)
                     return
-                async for item in run_turn(graph_input, config, caller):
+                async for item in run_turn(agent, graph_input, config, caller):
                     yield item
             except GraphRecursionError:
                 yield _sse("error", message=TOO_MANY_STEPS)
@@ -175,26 +199,41 @@ def create_app(
                 # Deliberately broad: whatever failed, the stream must end with an event.
                 # Only the type is logged: provider messages can hold request details.
                 log.error("turn failed: %s", type(e).__name__)
-                yield _sse("error", message=UNAVAILABLE)
+                limited = "RateLimit" in type(e).__name__
+                yield _sse("error", message=RATE_LIMITED if limited else UNAVAILABLE)
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict:
         return {"ok": True}
 
+    @app.get("/models")
+    async def models() -> dict:
+        return {"models": [{"id": n, "label": _model_label(n)} for n in app.state.graphs]}
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def web_chat() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html", headers={"Content-Security-Policy": CSP})
+
     @app.post("/chat")
     async def chat(body: ChatRequest, caller: CallerDep) -> EventSourceResponse:
+        # Only models from the server's own list can be used.
+        if body.model is not None and body.model not in app.state.graphs:
+            raise HTTPException(422, "Unknown model")
+        agent = app.state.graphs[body.model] if body.model else app.state.graph
         config = _thread_config(caller, body.thread_id)
         if await pending_proposals(config):
             raise HTTPException(409, "A proposal is waiting. Approve or reject it first.")
         message = {"messages": [HumanMessage(content=body.message)]}
-        return EventSourceResponse(events(message, config, caller, expect_pending=False))
+        return EventSourceResponse(events(agent, message, config, caller, expect_pending=False))
 
     async def decide(thread_id: str, caller: Caller, decision: str) -> EventSourceResponse:
         config = _thread_config(caller, thread_id)
         if not await pending_proposals(config):
             raise HTTPException(409, "Nothing is waiting for a decision in this conversation.")
         return EventSourceResponse(
-            events(Command(resume=decision), config, caller, expect_pending=True)
+            events(app.state.graph, Command(resume=decision), config, caller, expect_pending=True)
         )
 
     @app.post("/chat/{thread_id}/approve")

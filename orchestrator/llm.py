@@ -18,6 +18,8 @@ LLM_MAX_RETRIES = 2
 MAX_OUTPUT_TOKENS = 16000
 # Support answers should be consistent, so tool choice should not vary between runs.
 LLM_TEMPERATURE = 0.0
+# Preview models are only served on v1beta and return 404 on the library's default.
+GOOGLE_API_VERSION = "v1beta"
 
 
 class LLMConfigError(RuntimeError):
@@ -49,6 +51,7 @@ def _google_model(settings: Settings) -> BaseChatModel:
     return ChatGoogleGenerativeAI(
         model=settings.google_model,
         api_key=key,
+        api_version=GOOGLE_API_VERSION,
         temperature=LLM_TEMPERATURE,
         max_tokens=MAX_OUTPUT_TOKENS,
         timeout=LLM_TIMEOUT_SECONDS,

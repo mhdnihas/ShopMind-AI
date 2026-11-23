@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -115,7 +115,7 @@ _SEED = [
 def seed_orders(now: datetime | None = None) -> dict[int, Order]:
     """Build fresh seed orders. Dates are relative to `now` so queries like
     "paid but not shipped in 3 days" give the same answer whenever you run it."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     orders = {}
     for oid, merchant, name, email, phone, status, total, days, note, items in _SEED:
         status = OrderStatus(status)
